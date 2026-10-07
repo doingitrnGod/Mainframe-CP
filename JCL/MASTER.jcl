@@ -1,0 +1,339 @@
+//MASTER   JOB (ACCT),'ADMIT MASTER',CLASS=A,MSGCLASS=X,MSGLEVEL=(1,1)
+//*===================================================================
+//* MASTER EXECUTION JOB - CENTRALIZED ADMISSION SYSTEM
+//* Runs the complete pipeline from validation to final reports.
+//* Each step uses COND=(4,LT) to skip if a prior step failed.
+//*===================================================================
+//JOBLIB   DD DSN=USERID.ADMIT.LOADLIB,DISP=SHR
+//*
+//*-------------------------------------------------------------------
+//* PHASE 1: APPLICATION VALIDATION
+//*-------------------------------------------------------------------
+//M01VALID EXEC PGM=APPVALID
+//INFILE   DD DSN=USERID.ADMIT.DATA.APPLICANTS,DISP=SHR
+//OUTFILE  DD DSN=USERID.ADMIT.OUTPUT.VALIDAPP,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(5,2),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//REJFILE  DD DSN=USERID.ADMIT.OUTPUT.REJECTED,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//RPTFILE  DD DSN=USERID.ADMIT.OUTPUT.VALIDRPT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(5,1),RLSE),
+//            DCB=(LRECL=132,RECFM=FBA,BLKSIZE=13200)
+//SYSOUT   DD SYSOUT=*
+//SYSPRINT DD SYSOUT=*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 2: SORT AND REMOVE DUPLICATES
+//*-------------------------------------------------------------------
+//M02DEDUP EXEC PGM=SORT,COND=(4,LT)
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DSN=USERID.ADMIT.OUTPUT.VALIDAPP,DISP=SHR
+//SORTOUT  DD DSN=USERID.ADMIT.OUTPUT.CLEANAPP,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(5,2),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//DUPEOUT  DD DSN=USERID.ADMIT.OUTPUT.DUPES,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//SYSIN    DD *
+  SORT FIELDS=(7,8,CH,A)
+  SUM FIELDS=NONE
+  OUTFIL FNAMES=SORTOUT,NODUPS
+  OUTFIL FNAMES=DUPEOUT,SAVE
+/*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 3: DUPLICATE REPORT (REXX)
+//*-------------------------------------------------------------------
+//M03DUPE  EXEC PGM=IKJEFT01,PARM='%DUPECHECK',COND=(4,LT)
+//SYSPROC  DD DSN=USERID.ADMIT.REXX,DISP=SHR
+//DUPEIN   DD DSN=USERID.ADMIT.OUTPUT.DUPES,DISP=SHR
+//SYSTSPRT DD SYSOUT=*
+//SYSTSIN  DD DUMMY
+//*
+//*-------------------------------------------------------------------
+//* PHASE 4: SORT BY CET SCORE FOR MERIT LIST
+//*-------------------------------------------------------------------
+//M04SORT  EXEC PGM=SORT,COND=(4,LT)
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DSN=USERID.ADMIT.OUTPUT.CLEANAPP,DISP=SHR
+//SORTOUT  DD DSN=USERID.ADMIT.OUTPUT.SORTAPP,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(5,2),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//SYSIN    DD *
+  SORT FIELDS=(45,3,ZD,D,7,8,CH,A)
+/*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 5: MERIT LIST GENERATION (COBOL)
+//*-------------------------------------------------------------------
+//M05MERIT EXEC PGM=MERITGEN,COND=(4,LT)
+//CLEANIN  DD DSN=USERID.ADMIT.OUTPUT.SORTAPP,DISP=SHR
+//MERITOUT DD DSN=USERID.ADMIT.OUTPUT.MERITLST,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(5,2),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//ELIGOUT  DD DSN=USERID.ADMIT.OUTPUT.ELIGLIST,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(5,2),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//RPTFILE  DD DSN=USERID.ADMIT.OUTPUT.MERITRPT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(5,1),RLSE),
+//            DCB=(LRECL=132,RECFM=FBA,BLKSIZE=13200)
+//SYSOUT   DD SYSOUT=*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 6: COPY INITIAL SEAT MATRIX
+//*-------------------------------------------------------------------
+//M06SEATS EXEC PGM=IEBGENER,COND=(4,LT)
+//SYSUT1   DD DSN=USERID.ADMIT.DATA.COLLEGES,DISP=SHR
+//SYSUT2   DD DSN=USERID.ADMIT.OUTPUT.SMATXR0,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD DUMMY
+//*
+//*-------------------------------------------------------------------
+//* PHASE 7: CAP ROUND 1 ALLOCATION
+//*-------------------------------------------------------------------
+//M07CAP1  EXEC PGM=CAPALLOC,COND=(4,LT)
+//MERITIN  DD DSN=USERID.ADMIT.OUTPUT.MERITLST,DISP=SHR
+//SEATIN   DD DSN=USERID.ADMIT.OUTPUT.SMATXR0,DISP=SHR
+//PREFIN   DD DSN=USERID.ADMIT.DATA.PREFS,DISP=SHR
+//PREVALL  DD DUMMY
+//ACCEPTIN DD DUMMY
+//ALLOTOUT DD DSN=USERID.ADMIT.OUTPUT.ALLOTR1,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(5,2),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//SEATOUT  DD DSN=USERID.ADMIT.OUTPUT.SMATXR1,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//UNALLOT  DD DSN=USERID.ADMIT.OUTPUT.UNALTR1,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//RPTFILE  DD DSN=USERID.ADMIT.OUTPUT.CAP1RPT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(5,1),RLSE),
+//            DCB=(LRECL=132,RECFM=FBA,BLKSIZE=13200)
+//SYSOUT   DD SYSOUT=*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 8: CAP ROUND 2 (WITH ACCEPTANCE FROM ROUND 1)
+//*-------------------------------------------------------------------
+//M08CAP2  EXEC PGM=CAPALLOC,COND=(4,LT)
+//MERITIN  DD DSN=USERID.ADMIT.OUTPUT.MERITLST,DISP=SHR
+//SEATIN   DD DSN=USERID.ADMIT.OUTPUT.SMATXR1,DISP=SHR
+//PREFIN   DD DSN=USERID.ADMIT.DATA.PREFS,DISP=SHR
+//PREVALL  DD DSN=USERID.ADMIT.OUTPUT.ALLOTR1,DISP=SHR
+//ACCEPTIN DD DSN=USERID.ADMIT.DATA.ACCEPT1,DISP=SHR
+//ALLOTOUT DD DSN=USERID.ADMIT.OUTPUT.ALLOTR2,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(5,2),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//SEATOUT  DD DSN=USERID.ADMIT.OUTPUT.SMATXR2,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//UNALLOT  DD DSN=USERID.ADMIT.OUTPUT.UNALTR2,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//RPTFILE  DD DSN=USERID.ADMIT.OUTPUT.CAP2RPT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(5,1),RLSE),
+//            DCB=(LRECL=132,RECFM=FBA,BLKSIZE=13200)
+//SYSOUT   DD SYSOUT=*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 9: CAP ROUND 3 (WITH ACCEPTANCE FROM ROUND 2)
+//*-------------------------------------------------------------------
+//M09CAP3  EXEC PGM=CAPALLOC,COND=(4,LT)
+//MERITIN  DD DSN=USERID.ADMIT.OUTPUT.MERITLST,DISP=SHR
+//SEATIN   DD DSN=USERID.ADMIT.OUTPUT.SMATXR2,DISP=SHR
+//PREFIN   DD DSN=USERID.ADMIT.DATA.PREFS,DISP=SHR
+//PREVALL  DD DSN=USERID.ADMIT.OUTPUT.ALLOTR2,DISP=SHR
+//ACCEPTIN DD DSN=USERID.ADMIT.DATA.ACCEPT2,DISP=SHR
+//ALLOTOUT DD DSN=USERID.ADMIT.OUTPUT.ALLOTR3,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(5,2),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//SEATOUT  DD DSN=USERID.ADMIT.OUTPUT.SMATXR3,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//UNALLOT  DD DSN=USERID.ADMIT.OUTPUT.UNALTR3,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//RPTFILE  DD DSN=USERID.ADMIT.OUTPUT.CAP3RPT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(5,1),RLSE),
+//            DCB=(LRECL=132,RECFM=FBA,BLKSIZE=13200)
+//SYSOUT   DD SYSOUT=*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 10: EXTRACT FINAL ALLOTTED LIST (SORT INCLUDE)
+//*-------------------------------------------------------------------
+//M10FINAL EXEC PGM=SORT,COND=(4,LT)
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DSN=USERID.ADMIT.OUTPUT.ALLOTR3,DISP=SHR
+//SORTOUT  DD DSN=USERID.ADMIT.OUTPUT.FINALLOT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(5,2),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//SYSIN    DD *
+  SORT FIELDS=(7,4,ZD,A)
+  INCLUDE COND=(122,10,CH,EQ,C'ALLOTTED  ')
+/*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 11: EXTRACT UNALLOTTED LIST
+//*-------------------------------------------------------------------
+//M11UNALL EXEC PGM=SORT,COND=(4,LT)
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DSN=USERID.ADMIT.OUTPUT.ALLOTR3,DISP=SHR
+//SORTOUT  DD DSN=USERID.ADMIT.OUTPUT.FINALUNA,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//SYSIN    DD *
+  SORT FIELDS=(7,4,ZD,A)
+  INCLUDE COND=(122,10,CH,NE,C'ALLOTTED  ')
+/*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 12: VACANCY REPORT (COPY FINAL SEAT MATRIX)
+//*-------------------------------------------------------------------
+//M12VACCY EXEC PGM=IEBGENER,COND=(4,LT)
+//SYSUT1   DD DSN=USERID.ADMIT.OUTPUT.SMATXR3,DISP=SHR
+//SYSUT2   DD DSN=USERID.ADMIT.OUTPUT.VACANCY,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD DUMMY
+//*
+//*-------------------------------------------------------------------
+//* PHASE 13: SORT FEE FILE AND PROCESS FEES
+//*-------------------------------------------------------------------
+//M13FSORT EXEC PGM=SORT,COND=(4,LT)
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DSN=USERID.ADMIT.DATA.FEEPAY,DISP=SHR
+//SORTOUT  DD DSN=USERID.ADMIT.OUTPUT.FEESORT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//SYSIN    DD *
+  SORT FIELDS=(1,8,CH,A)
+/*
+//*
+//M14FEES  EXEC PGM=FEEPROC,COND=(4,LT)
+//ALLOTIN  DD DSN=USERID.ADMIT.OUTPUT.FINALLOT,DISP=SHR
+//FEEPAYIN DD DSN=USERID.ADMIT.OUTPUT.FEESORT,DISP=SHR
+//FEEOUT   DD DSN=USERID.ADMIT.OUTPUT.FEESTAT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=200,RECFM=FB,BLKSIZE=20000)
+//RPTFILE  DD DSN=USERID.ADMIT.OUTPUT.FEERPT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(5,1),RLSE),
+//            DCB=(LRECL=132,RECFM=FBA,BLKSIZE=13200)
+//SYSOUT   DD SYSOUT=*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 14: ACADEMIC PROCESSING
+//*-------------------------------------------------------------------
+//M15ACAD  EXEC PGM=ACADPROC,COND=(4,LT)
+//ACADIN   DD DSN=USERID.ADMIT.DATA.ACADEMIC,DISP=SHR
+//FEEIN    DD DSN=USERID.ADMIT.OUTPUT.FEESTAT,DISP=SHR
+//ACADOUT  DD DSN=USERID.ADMIT.OUTPUT.ACADPROC,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//RPTFILE  DD DSN=USERID.ADMIT.OUTPUT.ACADRPT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(5,1),RLSE),
+//            DCB=(LRECL=132,RECFM=FBA,BLKSIZE=13200)
+//SYSOUT   DD SYSOUT=*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 15: RESULT VALIDATION AND SEGREGATION
+//*-------------------------------------------------------------------
+//M16RSLT  EXEC PGM=RESULTPR,COND=(4,LT)
+//RESULTIN DD DSN=USERID.ADMIT.OUTPUT.ACADPROC,DISP=SHR
+//PASSOUT  DD DSN=USERID.ADMIT.OUTPUT.RESPASS,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//FAILOUT  DD DSN=USERID.ADMIT.OUTPUT.RESFAIL,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//BACKOUT  DD DSN=USERID.ADMIT.OUTPUT.RESBACK,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//WITHHOLD DD DSN=USERID.ADMIT.OUTPUT.RESWITH,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//RPTFILE  DD DSN=USERID.ADMIT.OUTPUT.RSLTRPT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(5,1),RLSE),
+//            DCB=(LRECL=132,RECFM=FBA,BLKSIZE=13200)
+//SYSOUT   DD SYSOUT=*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 16: SORT RESULTS BY PERCENTAGE
+//*-------------------------------------------------------------------
+//M17RSORT EXEC PGM=SORT,COND=(4,LT)
+//SYSOUT   DD SYSOUT=*
+//SORTIN   DD DSN=USERID.ADMIT.OUTPUT.ACADPROC,DISP=SHR
+//SORTOUT  DD DSN=USERID.ADMIT.OUTPUT.RESSORT,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(CYL,(1,1),RLSE),
+//            DCB=(LRECL=250,RECFM=FB,BLKSIZE=25000)
+//SYSIN    DD *
+  SORT FIELDS=(74,5,ZD,D)
+/*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 17: FINAL COMPREHENSIVE REPORT (COBOL)
+//*-------------------------------------------------------------------
+//M18FINAL EXEC PGM=FINALRPT,COND=(4,LT)
+//MERITFL  DD DSN=USERID.ADMIT.OUTPUT.MERITLST,DISP=SHR
+//ALLOT1   DD DSN=USERID.ADMIT.OUTPUT.ALLOTR1,DISP=SHR
+//ALLOT2   DD DSN=USERID.ADMIT.OUTPUT.ALLOTR2,DISP=SHR
+//ALLOT3   DD DSN=USERID.ADMIT.OUTPUT.ALLOTR3,DISP=SHR
+//FINALFL  DD DSN=USERID.ADMIT.OUTPUT.FINALLOT,DISP=SHR
+//VACANCFL DD DSN=USERID.ADMIT.OUTPUT.VACANCY,DISP=SHR
+//RESULTFL DD DSN=USERID.ADMIT.OUTPUT.ACADPROC,DISP=SHR
+//RPTFILE  DD DSN=USERID.ADMIT.OUTPUT.FINALSUM,
+//            DISP=(NEW,CATLG,DELETE),
+//            UNIT=SYSDA,SPACE=(TRK,(10,5),RLSE),
+//            DCB=(LRECL=132,RECFM=FBA,BLKSIZE=13200)
+//SYSOUT   DD SYSOUT=*
+//*
+//*-------------------------------------------------------------------
+//* PHASE 18: PROCESSING SUMMARY (REXX)
+//*-------------------------------------------------------------------
+//M19SUMM  EXEC PGM=IKJEFT01,PARM='%SUMMARY',COND=(4,LT)
+//SYSPROC  DD DSN=USERID.ADMIT.REXX,DISP=SHR
+//SYSTSPRT DD SYSOUT=*
+//SYSTSIN  DD DUMMY
+//*
+//*===================================================================
+//* END OF MASTER JOB
+//*===================================================================
+//
